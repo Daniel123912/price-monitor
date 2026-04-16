@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Price Monitor Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 20px; }
+        .stat-card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .stat-value { font-size: 32px; font-weight: bold; color: #667eea; }
+        .stat-label { color: #666; margin-top: 10px; }
+        .btn { background: #667eea; color: white; border: none; padding: 12px 24px; border-radius: 5px; cursor: pointer; font-size: 16px; margin-right: 10px; }
+        .btn:hover { background: #5a67d8; }
+        .table { background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #f8f9fa; font-weight: bold; }
+        .critical { color: #e53e3e; font-weight: bold; }
+        .positive { color: #38a169; }
+        .progress-bar { height: 30px; background: #e2e8f0; border-radius: 15px; overflow: hidden; margin: 20px 0; display: none; }
+        .progress-fill { height: 100%; background: #48bb78; transition: width 0.3s; display: flex; align-items: center; justify-content: center; color: white; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Price Monitor Dashboard</h1>
+            <p>Мониторинг цен конкурентов с историей изменений</p>
+        </div>
+        
+        <div class="stats" id="stats">
+            <div class="stat-card"><div class="stat-value" id="totalProducts">-</div><div class="stat-label">Всего товаров</div></div>
+            <div class="stat-card"><div class="stat-value" id="changesToday">-</div><div class="stat-label">Изменений сегодня</div></div>
+            <div class="stat-card"><div class="stat-value" id="criticalCount">-</div><div class="stat-label">Критичных</div></div>
+        </div>
+        
+        <div>
+            <button class="btn" onclick="runParse()">🚀 Запустить парсинг</button>
+            <button class="btn" onclick="compareDays()">📈 Сравнить с вчера</button>
+            <button class="btn" onclick="loadProducts()">🔄 Обновить</button>
+        </div>
+        
+        <div class="progress-bar" id="progressBar">
+            <div class="progress-fill" id="progressFill">0%</div>
+        </div>
+        
+        <div class="table">
+            <table id="productsTable">
+                <thead>
+                    <tr><th>Код</th><th>Товар</th><th>Наша цена</th><th>Цена конкурента</th><th>Разница</th><th>Изменение</th><th>Рекомендация</th></tr>
+                </thead>
+                <tbody id="productsBody"></tbody>
+            </table>
+        </div>
+    </div>
+    
+    <script>
+        const API_URL = '/api/v1';
+        
+        async function loadProducts() {
+            const response = await fetch(`${API_URL}/products`);
+            const products = await response.json();
+            
+            // Получаем сравнение с вчерашним днем
+            const compareResponse = await fetch(`${API_URL}/compare/today-vs-yesterday`);
+            const comparison = await compareResponse.json();
+            
+            document.getElementById('totalProducts').innerText = products.length;
+            document.getElementById('changesToday').innerText = comparison.products_with_changes || 0;
+            document.getElementById('criticalCount').innerText = comparison.critical_changes?.length || 0;
+            
+            const tbody = document.getElementById('productsBody');
+            tbody.innerHTML = '';
+            
+            for (const product of products) {
+                const row = tbody.insertRow();
+                const critical = comparison.critical_changes?.find(c => c.product_id === product.id);
+                
+                row.insertCell(0).innerText = product.article;
+                row.insertCell(1).innerText = product.name;
+                row.insertCell(2).innerText = product.our_price + ' ₽';
+                row.insertCell(3).innerText = '-';
+                row.insertCell(4).innerText = '-';
+                
+                const changeCell = row.insertCell(5);
+                if (critical) {
+                    changeCell.innerHTML = `<span class="critical">${critical.change_percent?.toFixed(1)}%</span>`;
+                    changeCell.className = 'critical';
+                } else {
+                    changeCell.innerText = '0%';
+                }
+                
+                row.insertCell(6).innerText = critical?.recommendation || 'Норма';
+                if (critical) row.classList.add('critical');
+            }
+        }
+        
+        async function runParse() {
+            const progressBar = document.getElementById('progressBar');
+            const progressFill = document.getElementById('progressFill');
+            progressBar.style.display = 'block';
+            
+            const response = await fetch(`${API_URL}/parse/start`, {method: 'POST'});
+            const {task_id} = await response.json();
+            
+            // Polling статуса
+            const interval = setInterval(async () => {
+                const statusRes = await fetch(`${API_URL}/parse/status/${task_id}`);
+                const status = await statusRes.json();
+                
+                if (status.status === 'SUCCESS') {
+                    clearInterval(interval);
+                    progressFill.style.width = '100%';
+                    progressFill.innerText = '100%';
+                    setTimeout(() => {
+                        progressBar.style.display = 'none';
+                        loadProducts();
+                    }, 1000);
+                } else if (status.result?.progress) {
+                    progressFill.style.width = status.result.progress + '%';
+                    progressFill.innerText = status.result.progress + '%';
+                }
+            }, 2000);
+        }
+        
+        async function compareDays() {
+            const response = await fetch(`${API_URL}/compare/today-vs-yesterday`);
+            const report = await response.json();
+            alert(`Изменений: ${report.products_with_changes}\nКритичных: ${report.critical_changes.length}`);
+            loadProducts();
+        }
+        
+        // WebSocket для real-time обновлений
+        const ws = new WebSocket(`ws://${window.location.host}/api/v1/ws`);
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.progress) {
+                const progressFill = document.getElementById('progressFill');
+                progressFill.style.width = data.progress + '%';
+                progressFill.innerText = data.progress + '%';
+            }
+        };
+        
+        loadProducts();
+        setInterval(loadProducts, 30000); // Обновление каждые 30 секунд
+    </script>
+</body>
+</html>
